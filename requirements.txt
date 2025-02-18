@@ -8,3 +8,4 @@ numpy
 matplotlib
 google-cloud-storage
 git-lfs
+python-multipart
