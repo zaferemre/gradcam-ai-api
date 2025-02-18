@@ -3,6 +3,7 @@ uvicorn
 torch
 torchvision
 pillow
+gunicorn
 numpy
 matplotlib
 google-cloud-storage
