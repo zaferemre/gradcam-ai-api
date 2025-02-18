@@ -154,7 +154,7 @@ async def startup_event():
     # Load model and Grad-CAM during the app startup
     print("Loading model...")
     model = DenseNet121(len(CLASS_NAMES))
-    checkpoint = torch.load("model.pth.tar", map_location=torch.device('cpu'))
+    checkpoint = torch.load("model.pth.tar", map_location=torch.device('cpu'), weights_only=False)
     state_dict = checkpoint["state_dict"]
     new_state_dict = {}
     for k, v in state_dict.items():
