@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+torch
+torchvision
+pillow
+numpy
+matplotlib
+google-cloud-storage
+git-lfs
