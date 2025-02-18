@@ -190,8 +190,3 @@ async def predict(file: UploadFile = File(...)):
     grad_cam_output = grad_cam_on_predictions(model, input_tensor, original_image, CLASS_NAMES, best_thresholds)
 
     return StreamingResponse(grad_cam_output, media_type="image/png")
-
-# Run the FastAPI app locally (optional for development)
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
