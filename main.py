@@ -8,6 +8,7 @@ from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 import torchvision
+from torchvision.models import DenseNet121_Weights
 
 # List of class names for diseases
 CLASS_NAMES = [
@@ -20,11 +21,12 @@ best_thresholds = [
     0.66, 0.71, 0.66, 0.63, 0.70, 0.69, 0.69, 0.69, 0.67, 0.70, 0.71, 0.72, 0.69, 0.71
 ]
 
-# Define the model
+# Define the model class
 class DenseNet121(nn.Module):
     def __init__(self, out_size):
         super(DenseNet121, self).__init__()
-        self.densenet121 = torchvision.models.densenet121(pretrained=True)
+        # Use the 'weights' argument instead of 'pretrained'
+        self.densenet121 = torchvision.models.densenet121(weights=DenseNet121_Weights.IMAGENET1K_V1)
         num_ftrs = self.densenet121.classifier.in_features
         self.densenet121.classifier = nn.Sequential(
             nn.Linear(num_ftrs, out_size),
@@ -64,7 +66,7 @@ class GradCAM:
             heatmap += w * activation[i]
 
         heatmap = torch.clamp(heatmap, min=0)
-        return heatmap.cpu().numpy()
+        return heatmap.cpu().numpy()  # Return to CPU for visualization
 
 # Function to process image
 def process_image(image_input):
@@ -83,21 +85,75 @@ def process_image(image_input):
     input_tensor = transform(image).unsqueeze(0)  # Add batch dimension
     return input_tensor, image
 
-# Load model globally for reuse
-N_CLASSES = len(CLASS_NAMES)
+# Function to predict diseases from the image
+def predict_diseases(model, input_tensor):
+    device = next(model.parameters()).device
+    input_tensor = input_tensor.to(device)
+    with torch.no_grad():
+        logits = model(input_tensor)
+        probabilities = torch.sigmoid(logits).squeeze().cpu().numpy()
+    return probabilities
 
-# Initialize FastAPI app
+# Grad-CAM visualization
+def grad_cam_on_predictions(model, input_tensor, original_image, class_names, thresholds):
+    device = next(model.parameters()).device
+    input_tensor = input_tensor.to(device)
+    logits = model(input_tensor)
+    probabilities = torch.sigmoid(logits).detach().cpu().numpy().flatten()
+
+    predicted_indices = [i for i in range(len(class_names)) if probabilities[i] > thresholds[i]]
+    predicted_scores = [probabilities[i] for i in predicted_indices]
+    predicted_classes = [class_names[i] for i in predicted_indices]
+
+    fig, axes = plt.subplots(1, len(predicted_classes) + 1, figsize=(6 * (len(predicted_classes) + 1), 6))
+    axes[0].imshow(original_image)
+    axes[0].set_title("Original Image", fontsize=14)
+    axes[0].axis("off")
+
+    for idx, (disease, score) in enumerate(zip(predicted_classes, predicted_scores)):
+        target_class = class_names.index(disease)
+        model.zero_grad()
+        logits[0, target_class].backward(retain_graph=True)
+
+        # Pass the target_class to generate_heatmap
+        heatmap = grad_cam.generate_heatmap(target_class)  # Use grad_cam instance
+        heatmap = np.maximum(heatmap, 0)
+        heatmap /= heatmap.max()
+
+        heatmap_resized = Image.fromarray((heatmap * 255).astype(np.uint8)).resize(original_image.size, Image.BICUBIC)
+        heatmap_array = np.array(heatmap_resized)
+        heatmap_overlay = np.array(original_image).astype(np.float32)
+        heatmap_overlay = (heatmap_overlay * 0.6 + plt.cm.jet(heatmap_array / 255.0)[:, :, :3] * 255 * 0.4).astype(np.uint8)
+
+        axes[idx + 1].imshow(heatmap_overlay)
+        axes[idx + 1].set_title(f"{disease}\nConfidence: {score:.2%}")
+        axes[idx + 1].axis("off")
+
+    plt.tight_layout()
+
+    # Save the figure to a BytesIO object
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png")
+    buf.seek(0)
+    return buf
+
+
+# FastAPI Setup
+from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import StreamingResponse
+
 app = FastAPI()
 
-# Model loading and Grad-CAM setup at startup
+# Initialize model and Grad-CAM at startup
 model = None
 grad_cam = None
 
 @app.on_event("startup")
 async def startup_event():
     global model, grad_cam
-    # Load the model once when the application starts
-    model = DenseNet121(N_CLASSES)
+    # Load model and Grad-CAM during the app startup
+    print("Loading model...")
+    model = DenseNet121(len(CLASS_NAMES))
     checkpoint = torch.load("model.pth.tar", map_location=torch.device('cpu'))
     state_dict = checkpoint["state_dict"]
     new_state_dict = {}
@@ -110,6 +166,7 @@ async def startup_event():
     # Set up Grad-CAM
     target_layer = model.densenet121.features[-1]  # Last convolutional layer of DenseNet121
     grad_cam = GradCAM(model, target_layer)
+    print("Model loaded successfully")
 
 @app.post("/predict/")
 async def predict(file: UploadFile = File(...)):
